@@ -1,0 +1,198 @@
+<!DOCTYPE HTML>
+<html>
+	<head>
+		<meta charset="utf-8"/>
+		<title>Zettel 7</title>
+		
+		<script id="vertex-shader" type="x-shader/x-vertex">
+			attribute vec4 vPosition;
+			attribute vec3 vNormal;
+			attribute vec2 vTexCoord;
+			
+			uniform mat4 modelMatrix;
+			uniform mat4 viewMatrix;
+			uniform mat4 projectionMatrix;
+			uniform int isWaved;
+			uniform float clock;
+
+			uniform vec3 lightPosition;
+
+			varying vec4 position;
+			varying vec4 lightPos;
+			varying vec4 fNormal;
+
+			varying float fisWaved;
+			varying float fclock;
+
+			varying vec2 fTexCoord;
+
+			void main()
+			{
+				// Rechne alle übergebenen Koordinaten (Lichtposition, Normalen) in das Kamerakoordinatensystem um
+				lightPos = viewMatrix * vec4(lightPosition, 1.0);
+
+				position = viewMatrix * modelMatrix * vPosition;
+
+				//Anheben und absenken der y-Positon des Wassers anhand einer Wellenfunktion
+				if(isWaved == 1){
+					//position.y = position.y + 0.2 + (sin(vPosition.x + clock) 
+					//				+ sin(vPosition.z + clock) * 0.5) * 0.15;
+
+					position.y = position.y + (0.06 * ((sin(clock + position.x + position.z)) + 1.0));
+
+				}
+
+				fNormal = vec4(vNormal, 1.0); //edit back! TODO
+				
+				//Übergabe einiger Variablen an den FragShader
+				fTexCoord = vTexCoord;
+				fisWaved = float(isWaved);
+				fclock = clock;
+
+				gl_Position = projectionMatrix * position;
+			}
+		</script>
+		<script id="fragment-shader" type="x-shader/x-fragment">
+			precision mediump float;
+			
+			uniform vec4 Ia; 
+			uniform vec4 Id; 
+			uniform vec4 Is; 
+			uniform vec4 ka; 
+			uniform vec4 kd; 
+			uniform vec4 ks;
+			uniform float specExp;
+			uniform int isTextured;
+
+
+			uniform mat4 normalMatrix;
+
+			uniform sampler2D diffuseMap;
+			
+			//Füge Normal Map als uniforme Variable hinzu.
+			uniform sampler2D normalMap;
+
+			const float c_1 = 1.0;
+			const float c_2 = 0.0005;
+			const float c_3 = 0.000003;
+			
+			varying vec4 position;
+			varying vec4 lightPos;
+			varying vec4 fNormal;
+
+			varying float fisWaved;
+			varying float fclock;
+			varying vec2 fTexCoord;
+
+			vec3 tangent;
+			vec3 N;
+			vec3 L;
+			vec3 V;
+			vec3 R;
+
+			float d;
+			float f_att;
+
+			void main()
+			{	
+				//Berechnung der Normalen für untexturierte Objekte
+				vec3 N = normalize((normalMatrix * fNormal).xyz);
+
+				//Berechne und normiere die Vektoren L, R und V. 
+				vec3 L = normalize((lightPos - position).xyz);
+				vec3 V = normalize((-position).xyz);	
+				vec3 R = reflect(-L, N); 				
+
+				//Berechne die Koeffizienten d, sowie f_{att}
+				float d = distance(lightPos, position);
+				float f_att = min(1.0/(c_1 + c_2 * d + c_3 * d * d),1.0);
+
+				//Berechnung für untexturierte Objekte
+				gl_FragColor =  vec4((Ia * ka + f_att * (Id * kd * max(dot(N, L), 0.0) + Is * ks * pow(max(dot(R, V), 0.0), specExp))).rgb,1.0);
+				
+				//Berechung der Beleuchtung für texturierte Objekte
+				if(isTextured == 1){
+
+					//Berechnung der TBN-Matrix für texturierte Objekte
+					vec3 t1 = cross(fNormal.xyz, vec3(0.0, 0.0, 1.0));
+					vec3 t2 = cross(fNormal.xyz, vec3(0.0, 1.0, 0.0));
+					if (length(t1) > length(t2)) {
+						tangent = normalize(t1);
+					} else {
+						tangent = normalize(t2);
+					}
+					vec3 n = normalize((normalMatrix * fNormal).xyz);
+					vec3 t = normalize((normalMatrix * vec4(tangent, 1.0)).xyz);
+					vec3 b = cross(n, t);
+	
+					mat3 tbn = mat3(t,b,n);
+
+					//Umrechnen der Normalmap in Normalen für texturierte Objekte
+					vec3 normalMapf = texture2D(normalMap, fTexCoord).xyz * 2.0 - 1.0;
+					N = normalize(tbn * normalMapf);
+
+					// Berechne und normiere die Vektoren L, R und V. 
+					L = normalize((lightPos - position).xyz);
+					V = normalize((-position).xyz);	
+					R = reflect(-L, N); 	
+
+					// Berechne die Koeffizienten d, sowie f_{att}
+					d = distance(lightPos, position);
+					f_att = min(1.0/(c_1 + c_2 * d + c_3 * d * d),1.0);
+
+					//Festlegen des diffusen Anteils mit Hilfe der Textur bei texturierten Objekten
+					vec4 diffuseColor = texture2D(diffuseMap, fTexCoord);
+
+					//Berechnung für texturierte Objekte
+					gl_FragColor =  vec4((Ia * ka + f_att * (Id * diffuseColor * max(dot(N, L), 0.0) + Is * ks * pow(max(dot(R, V), 0.0), specExp))).rgb,1.0);
+
+				}
+
+				//Berechnung der Beleuchtung anhand der neuen y-Position für Wasser
+				
+				if(fisWaved == 1.0){
+					//Normalen und Farbenberechnung des Wassers
+					vec3 T = normalize(vec3(position.x + 0.01, position.y, position.z) - vec3(position.x, position.y, position.z));
+					vec3 B = normalize(vec3(position.x, position.y, position.z + 0.01) - vec3(position.x, position.y, position.z));
+
+					N = normalize(cross(T,B));
+					N.y = abs(N.y);
+					
+					//Berechne und normiere die Vektoren L, R und V. 
+					vec3 L = normalize((lightPos - position).xyz);
+					vec3 V = normalize((-position).xyz);	
+					vec3 R = reflect(-L, N); 				
+
+					//Berechne die Koeffizienten d, sowie f_{att}
+					float d = distance(lightPos, position);
+					float f_att = min(1.0/(c_1 + c_2 * d + c_3 * d * d),1.0);
+
+					gl_FragColor =  vec4((Ia * ka + f_att * (Id * kd * max(dot(N, L), 0.0) + Is * ks * pow(max(dot(R, V), 0.0), specExp))).rgb,1.0);
+
+				}
+				//-------------------------------------
+				//Debugging ~
+				//Dafür aber auch fNormal = vec4(vNormal, 1.0); im VertexShader setzen
+				//gl_FragColor = normalize(fNormal); //Normalen Test
+                //gl_FragColor = normalize(lightPos);//Licht Test
+				//gl_FragColor = diffuseColor;		 //Textur Test 
+				//-------------------------------------
+			}
+		</script>
+
+		<script type="text/javascript" src="common/initShaders.js">
+		</script>
+		<script type="text/javascript" src="common/gl-matrix.js">
+		</script>
+	</head>
+	<body>
+
+		<canvas id="gl-canvas" width="512" height="512">
+			If you see this, your browser doesn't support WebGL.
+		</canvas>
+
+		<script type="text/javascript" src="logic.js">
+		</script>
+		
+	</body>
+</html>
